@@ -744,6 +744,11 @@ setupPosGrid('textPosGrid', 'bot-left', p => textPosition = p);
 function linkSlider(id, valId, suffix) {
   const el = document.getElementById(id);
   const vl = document.getElementById(valId);
+  el.addEventListener('touchstart', () => {
+    if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+      document.activeElement.blur();
+    }
+  }, {passive: true});
   el.addEventListener('input', () => vl.textContent = el.value + suffix);
 }
 linkSlider('logoOpacity', 'logoOpacityVal', '%');
