@@ -80,6 +80,11 @@ header p { font-size: clamp(12px,3vw,14px); color: rgba(255,255,255,0.6); font-w
 .music-card.selected::after { content: "✓"; position: absolute; right: 14px; color: var(--gold); font-weight: 900; font-size: 18px; }
 .music-icon { font-size: 28px; flex-shrink: 0; }
 .music-name { font-size: clamp(14px,3.5vw,16px); font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+.music-section-label { font-size: 12px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; padding: 0 2px; }
+.music-card.preset { border-color: var(--border2); }
+.music-card.preset .music-badge { display: inline-block; font-size: 9px; font-weight: 900; background: var(--red-dark); color: var(--gold); padding: 2px 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; }
+.music-loading { color: var(--muted); font-size: 14px; font-weight: 700; padding: 10px 0; text-align: center; }
+.music-card.user-track .music-badge { background: rgba(227,173,72,0.15); color: var(--gold); }
 .music-empty { color: var(--muted); font-size: clamp(14px,3.5vw,16px); font-weight: 700; text-align: center; padding: 16px 0; }
 .add-music-btn { border: 2px dashed var(--border2); border-radius: 12px; padding: 14px 16px; cursor: pointer; display: flex; align-items: center; gap: 12px; background: rgba(0,0,0,0.15); color: var(--muted); font-family: 'Barlow', sans-serif; font-weight: 800; font-size: clamp(14px,3.5vw,16px); width: 100%; position: relative; transition: all 0.2s; margin-top: 10px; }
 .add-music-btn:active { border-color: var(--red); color: var(--text); }
@@ -159,13 +164,23 @@ canvas { display: none; }
   <!-- 2. MÚSICA -->
   <div class="card">
     <div class="card-title"><span class="icon">🎵</span> 2 — Elige la Música</div>
-    <div class="music-grid" id="musicGrid">
-      <div class="music-empty">Agregá canciones con el botón de abajo ⬇️</div>
+
+    <!-- Canciones predeterminadas -->
+    <div class="music-section-label" id="presetLabel">🎶 Canciones incluidas</div>
+    <div class="music-grid" id="presetGrid">
+      <div class="music-loading">⏳ Cargando canciones...</div>
     </div>
+
+    <!-- Canciones del usuario -->
+    <div class="music-section-label" id="userLabel" style="margin-top:14px">➕ Tus canciones</div>
+    <div class="music-grid" id="musicGrid">
+      <div class="music-empty">Agregá tus propias canciones abajo ⬇️</div>
+    </div>
+
     <label class="add-music-btn">
       <input type="file" id="musicUpload" accept="audio/*" multiple>
       <span style="font-size:24px">➕</span>
-      <span>Agregar canciones (MP3, WAV...)</span>
+      <span>Agregar mis canciones (MP3, WAV...)</span>
     </label>
   </div>
 
@@ -278,13 +293,15 @@ logoImg.src = LOGO_URL;
 // ===== STATE =====
 let videoFile = null;
 let selectedMusic = null;
-let musicLibrary = [];
 let logoPosition = 'top-right';
 let textPosition = 'bot-left';
 let ffmpegInstance = null;
 
 const { FFmpeg } = FFmpegWASM;
 const { fetchFile } = FFmpegUtil;
+
+// Load preset songs on page start
+window.addEventListener('DOMContentLoaded', () => loadPresetSongs());
 
 // ===== VIDEO INPUT =====
 document.getElementById('videoInput').addEventListener('change', function(e) {
@@ -314,24 +331,86 @@ vz.addEventListener('drop', e => {
 });
 
 // ===== MUSIC =====
-document.getElementById('musicUpload').addEventListener('change', function(e) {
-  Array.from(e.target.files).forEach(file => {
-    musicLibrary.push({ name: file.name.replace(/\.[^.]+$/, ''), url: URL.createObjectURL(file), file });
-  });
-  renderMusic();
-});
+// PRESET songs from music/ folder — add filenames here whenever you add files
+const PRESET_SONGS = [
+  { name: 'Sangre de Campeón', file: 'music/sangre-de-campeon.mp3' },
+  // Add more preset songs here, e.g.:
+  // { name: 'Nombre de la canción', file: 'music/nombre-archivo.mp3' },
+];
 
-function renderMusic() {
-  const g = document.getElementById('musicGrid');
-  if (!musicLibrary.length) { g.innerHTML = '<div class="music-empty">Agregá canciones con el botón de abajo ⬇️</div>'; return; }
-  g.innerHTML = musicLibrary.map((m, i) => `
-    <div class="music-card ${selectedMusic === i ? 'selected' : ''}" onclick="selMusic(${i})">
-      <span class="music-icon">🎵</span>
-      <span class="music-name">${m.name}</span>
-    </div>`).join('');
+// Library: each entry = { name, file (File object or null), url (blob or relative), isPreset }
+// selectedMusic = index into full combined list (presets first, then user)
+let presetLibrary = [];  // loaded preset entries
+let userLibrary = [];    // user-uploaded entries
+
+async function loadPresetSongs() {
+  const grid = document.getElementById('presetGrid');
+  const results = [];
+  for (const song of PRESET_SONGS) {
+    try {
+      const response = await fetch(song.file);
+      if (!response.ok) throw new Error('not found');
+      const blob = await response.blob();
+      const file = new File([blob], song.file.split('/').pop(), { type: blob.type });
+      results.push({ name: song.name, file, url: URL.createObjectURL(blob), isPreset: true });
+    } catch(e) {
+      console.warn('Could not load preset:', song.file, e);
+    }
+  }
+  presetLibrary = results;
+  renderAllMusic();
 }
 
-function selMusic(i) { selectedMusic = i; renderMusic(); updateSteps(); }
+document.getElementById('musicUpload').addEventListener('change', function(e) {
+  Array.from(e.target.files).forEach(file => {
+    userLibrary.push({ name: file.name.replace(/\.[^.]+$/, ''), file, url: URL.createObjectURL(file), isPreset: false });
+  });
+  renderAllMusic();
+});
+
+function getAllTracks() {
+  return [...presetLibrary, ...userLibrary];
+}
+
+function renderAllMusic() {
+  const all = getAllTracks();
+
+  // --- Preset section ---
+  const presetGrid = document.getElementById('presetGrid');
+  if (presetLibrary.length === 0) {
+    presetGrid.innerHTML = '<div class="music-empty">No hay canciones incluidas disponibles</div>';
+  } else {
+    presetGrid.innerHTML = presetLibrary.map((m, i) => `
+      <div class="music-card preset ${selectedMusic === i ? 'selected' : ''}" onclick="selMusic(${i})">
+        <span class="music-icon">🎵</span>
+        <span class="music-name">${m.name}</span>
+        <span class="music-badge">incluida</span>
+      </div>`).join('');
+  }
+
+  // --- User section ---
+  const userGrid = document.getElementById('musicGrid');
+  if (userLibrary.length === 0) {
+    userGrid.innerHTML = '<div class="music-empty">Agregá tus propias canciones abajo ⬇️</div>';
+  } else {
+    const offset = presetLibrary.length;
+    userGrid.innerHTML = userLibrary.map((m, i) => {
+      const globalIdx = offset + i;
+      return `
+      <div class="music-card user-track ${selectedMusic === globalIdx ? 'selected' : ''}" onclick="selMusic(${globalIdx})">
+        <span class="music-icon">🎵</span>
+        <span class="music-name">${m.name}</span>
+        <span class="music-badge">tuya</span>
+      </div>`;
+    }).join('');
+  }
+}
+
+function selMusic(i) {
+  selectedMusic = i;
+  renderAllMusic();
+  updateSteps();
+}
 
 // ===== POSITIONS =====
 function setupPosGrid(gridId, callback) {
@@ -546,9 +625,12 @@ async function processWithFFmpeg() {
   // ----- Write music to FFmpeg FS if selected -----
   let hasMusicFile = false;
   if (selectedMusic !== null) {
-    const musicData = await fetchFile(musicLibrary[selectedMusic].file);
-    await ffmpegInstance.writeFile('input_music', musicData);
-    hasMusicFile = true;
+    const track = getAllTracks()[selectedMusic];
+    if (track && track.file) {
+      const musicData = await fetchFile(track.file);
+      await ffmpegInstance.writeFile('input_music', musicData);
+      hasMusicFile = true;
+    }
   }
 
   // ----- Extract frames from video via FFmpeg (produces clean frames at exact fps) -----
