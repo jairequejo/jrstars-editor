@@ -158,6 +158,12 @@ header p {
 .upload-zone input[type=file] {
   position: absolute; inset: 0;
   opacity: 0; cursor: pointer; width: 100%; height: 100%;
+  z-index: 10;
+}
+.upload-zone .uz-icon, .upload-zone .uz-label {
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
 }
 .upload-zone:active, .upload-zone.drag-over {
   border-color: var(--red);
