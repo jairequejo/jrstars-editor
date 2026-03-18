@@ -849,7 +849,14 @@ async function processVideo() {
   vid.muted = true; vid.playsInline = true;
   await new Promise((res, rej) => { vid.onloadedmetadata = res; vid.onerror = rej; vid.load(); });
 
-  const W = vid.videoWidth, H = vid.videoHeight, duration = vid.duration;
+  let W = vid.videoWidth, H = vid.videoHeight;
+  const MAX_DIM = 720;
+  if (Math.max(W, H) > MAX_DIM) {
+    const scale = MAX_DIM / Math.max(W, H);
+    W = Math.round(W * scale);
+    H = Math.round(H * scale);
+  }
+  const duration = vid.duration;
 
   const canvas = document.getElementById('canvas');
   canvas.width = W; canvas.height = H;
@@ -1001,7 +1008,7 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 function getSupportedMime() {
-  const t = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+  const t = ['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm','video/mp4'];
   return t.find(m => MediaRecorder.isTypeSupported(m)) || '';
 }
 
