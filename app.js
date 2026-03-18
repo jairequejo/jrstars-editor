@@ -40,15 +40,22 @@ let textPosition  = 'bot-left';
 let ffmpegInstance = null;
 let ffmpegLoaded   = false;
 
-const CORE_BASE = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.4/dist/esm';
+const CORE_BASE   = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.4/dist/esm';
+const WORKER_BASE = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm';
 
 async function ensureFFmpeg() {
   if (ffmpegInstance && ffmpegLoaded) return ffmpegInstance;
   ffmpegInstance = new FFmpeg();
   ffmpegInstance.on('log', ({ message }) => console.log('[ffmpeg]', message));
-  const coreURL = await toBlobURL(`${CORE_BASE}/ffmpeg-core.js`,   'text/javascript');
-  const wasmURL = await toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, 'application/wasm');
-  await ffmpegInstance.load({ coreURL, wasmURL });
+
+  // Los TRES scripts se convierten a blob: URLs — esto es la clave.
+  // GitHub Pages bloquea Workers con scripts cross-origin, entonces
+  // toBlobURL los descarga y los envuelve en una blob: URL same-origin.
+  const coreURL   = await toBlobURL(`${CORE_BASE}/ffmpeg-core.js`,   'text/javascript');
+  const wasmURL   = await toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, 'application/wasm');
+  const workerURL = await toBlobURL(`${WORKER_BASE}/worker.js`,       'text/javascript');
+
+  await ffmpegInstance.load({ coreURL, wasmURL, workerURL });
   ffmpegLoaded = true;
   return ffmpegInstance;
 }
