@@ -4,8 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Editor de Videos JR STARS</title>
-<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:wght@400;600;700;800;900&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -164,19 +162,14 @@ canvas { display: none; }
   <!-- 2. MÚSICA -->
   <div class="card">
     <div class="card-title"><span class="icon">🎵</span> 2 — Elige la Música</div>
-
-    <!-- Canciones predeterminadas -->
     <div class="music-section-label" id="presetLabel">🎶 Canciones incluidas</div>
     <div class="music-grid" id="presetGrid">
       <div class="music-loading">⏳ Cargando canciones...</div>
     </div>
-
-    <!-- Canciones del usuario -->
     <div class="music-section-label" id="userLabel" style="margin-top:14px">➕ Tus canciones</div>
     <div class="music-grid" id="musicGrid">
       <div class="music-empty">Agregá tus propias canciones abajo ⬇️</div>
     </div>
-
     <label class="add-music-btn">
       <input type="file" id="musicUpload" accept="audio/*" multiple>
       <span style="font-size:24px">➕</span>
@@ -283,7 +276,16 @@ canvas { display: none; }
 
 <canvas id="canvas"></canvas>
 
-<script>
+<!-- =====================================================================
+     KEY FIX: Load FFmpeg via ESM + toBlobURL to bypass GitHub Pages CORS
+     restrictions on cross-origin Worker scripts.
+     toBlobURL fetches each script and wraps it in a blob: URL that the
+     browser treats as same-origin, so the Worker can be constructed.
+====================================================================== -->
+<script type="module">
+import { FFmpeg } from 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js';
+import { toBlobURL, fetchFile } from 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js';
+
 // ===== LOGO =====
 const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2560 1440"><g transform="matrix(-2.876576,0,0,-2.689629,2184.259338,1850.01281)"><path d="M154.012,632.639L154.012,459.81L154.092,459.81C155.779,399.173 184.276,341.311 233.325,306.521L320.062,245L406.8,306.521C455.849,341.311 484.346,399.173 486.033,459.81L486.113,459.81L486.113,632.824C467.881,620.967 443.235,613.688 416.125,613.688C371.754,613.688 333.985,633.188 320.131,660.34L319.709,660.34C305.855,633.188 268.086,613.688 223.715,613.688C196.746,613.688 172.216,620.892 154.012,632.639Z" style="fill:rgb(255,0,0);"/></g></svg>`;
 const LOGO_URL = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(LOGO_SVG);
@@ -298,38 +300,47 @@ let textPosition = 'bot-left';
 let ffmpegInstance = null;
 let ffmpegLoaded = false;
 
-// Safe access to FFmpeg globals (UMD exposes different names depending on version)
-function getFFmpegClass() {
-  if (window.FFmpegWASM && window.FFmpegWASM.FFmpeg) return window.FFmpegWASM.FFmpeg;
-  if (window.FFmpeg && window.FFmpeg.FFmpeg) return window.FFmpeg.FFmpeg;
-  if (window.FFmpeg && typeof window.FFmpeg === 'function') return window.FFmpeg;
-  throw new Error('FFmpeg no encontrado. Revisá tu conexión a internet.');
-}
-
-function getFetchFile() {
-  if (window.FFmpegUtil && window.FFmpegUtil.fetchFile) return window.FFmpegUtil.fetchFile;
-  if (window.fetchFile) return window.fetchFile;
-  throw new Error('fetchFile no encontrado.');
-}
+// CDN base for FFmpeg core WASM — these get fetched and converted to blob: URLs
+const CORE_BASE = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.4/dist/esm';
 
 async function ensureFFmpeg() {
-  const FFmpegClass = getFFmpegClass();
-  // Always create a fresh instance if not loaded
-  if (!ffmpegInstance || !ffmpegLoaded) {
-    ffmpegInstance = new FFmpegClass();
-    ffmpegLoaded = false;
-    ffmpegInstance.on('log', ({ message }) => console.log('[ffmpeg]', message));
-    await ffmpegInstance.load({
-      coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.4/dist/umd/ffmpeg-core.js',
-      wasmURL:  'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.4/dist/umd/ffmpeg-core.wasm',
-    });
-    ffmpegLoaded = true;
-  }
+  if (ffmpegInstance && ffmpegLoaded) return ffmpegInstance;
+
+  ffmpegInstance = new FFmpeg();
+  ffmpegInstance.on('log', ({ message }) => console.log('[ffmpeg]', message));
+
+  // toBlobURL fetches the script and returns a blob: URL — bypasses CORS for Workers
+  const coreURL  = await toBlobURL(`${CORE_BASE}/ffmpeg-core.js`,   'text/javascript');
+  const wasmURL  = await toBlobURL(`${CORE_BASE}/ffmpeg-core.wasm`, 'application/wasm');
+
+  await ffmpegInstance.load({ coreURL, wasmURL });
+  ffmpegLoaded = true;
   return ffmpegInstance;
 }
 
-// Load preset songs on page start
-window.addEventListener('DOMContentLoaded', () => loadPresetSongs());
+// ===== PRESET SONGS =====
+const PRESET_SONGS = [
+  { name: 'Sangre de Campeón', file: 'music/sangre-de-campeon.mp3' },
+  // Add more: { name: 'Nombre', file: 'music/archivo.mp3' },
+];
+
+let presetLibrary = [];
+let userLibrary   = [];
+
+async function loadPresetSongs() {
+  const results = [];
+  for (const song of PRESET_SONGS) {
+    try {
+      const response = await fetch(song.file);
+      if (!response.ok) throw new Error('not found');
+      const blob = await response.blob();
+      const file = new File([blob], song.file.split('/').pop(), { type: blob.type });
+      results.push({ name: song.name, file, url: URL.createObjectURL(blob), isPreset: true });
+    } catch(e) { console.warn('Could not load preset:', song.file, e); }
+  }
+  presetLibrary = results;
+  renderAllMusic();
+}
 
 // ===== VIDEO INPUT =====
 document.getElementById('videoInput').addEventListener('change', function(e) {
@@ -358,37 +369,7 @@ vz.addEventListener('drop', e => {
   }
 });
 
-// ===== MUSIC =====
-// PRESET songs from music/ folder — add filenames here whenever you add files
-const PRESET_SONGS = [
-  { name: 'Sangre de Campeón', file: 'music/sangre-de-campeon.mp3' },
-  // Add more preset songs here, e.g.:
-  // { name: 'Nombre de la canción', file: 'music/nombre-archivo.mp3' },
-];
-
-// Library: each entry = { name, file (File object or null), url (blob or relative), isPreset }
-// selectedMusic = index into full combined list (presets first, then user)
-let presetLibrary = [];  // loaded preset entries
-let userLibrary = [];    // user-uploaded entries
-
-async function loadPresetSongs() {
-  const grid = document.getElementById('presetGrid');
-  const results = [];
-  for (const song of PRESET_SONGS) {
-    try {
-      const response = await fetch(song.file);
-      if (!response.ok) throw new Error('not found');
-      const blob = await response.blob();
-      const file = new File([blob], song.file.split('/').pop(), { type: blob.type });
-      results.push({ name: song.name, file, url: URL.createObjectURL(blob), isPreset: true });
-    } catch(e) {
-      console.warn('Could not load preset:', song.file, e);
-    }
-  }
-  presetLibrary = results;
-  renderAllMusic();
-}
-
+// ===== MUSIC INPUT =====
 document.getElementById('musicUpload').addEventListener('change', function(e) {
   Array.from(e.target.files).forEach(file => {
     userLibrary.push({ name: file.name.replace(/\.[^.]+$/, ''), file, url: URL.createObjectURL(file), isPreset: false });
@@ -396,49 +377,42 @@ document.getElementById('musicUpload').addEventListener('change', function(e) {
   renderAllMusic();
 });
 
-function getAllTracks() {
-  return [...presetLibrary, ...userLibrary];
-}
+function getAllTracks() { return [...presetLibrary, ...userLibrary]; }
 
 function renderAllMusic() {
-  const all = getAllTracks();
-
-  // --- Preset section ---
   const presetGrid = document.getElementById('presetGrid');
   if (presetLibrary.length === 0) {
     presetGrid.innerHTML = '<div class="music-empty">No hay canciones incluidas disponibles</div>';
   } else {
     presetGrid.innerHTML = presetLibrary.map((m, i) => `
-      <div class="music-card preset ${selectedMusic === i ? 'selected' : ''}" onclick="selMusic(${i})">
+      <div class="music-card preset ${selectedMusic === i ? 'selected' : ''}" data-idx="${i}">
         <span class="music-icon">🎵</span>
         <span class="music-name">${m.name}</span>
         <span class="music-badge">incluida</span>
       </div>`).join('');
+    presetGrid.querySelectorAll('.music-card').forEach(el =>
+      el.addEventListener('click', () => selMusic(parseInt(el.dataset.idx))));
   }
 
-  // --- User section ---
   const userGrid = document.getElementById('musicGrid');
+  const offset = presetLibrary.length;
   if (userLibrary.length === 0) {
     userGrid.innerHTML = '<div class="music-empty">Agregá tus propias canciones abajo ⬇️</div>';
   } else {
-    const offset = presetLibrary.length;
     userGrid.innerHTML = userLibrary.map((m, i) => {
-      const globalIdx = offset + i;
-      return `
-      <div class="music-card user-track ${selectedMusic === globalIdx ? 'selected' : ''}" onclick="selMusic(${globalIdx})">
+      const gIdx = offset + i;
+      return `<div class="music-card user-track ${selectedMusic === gIdx ? 'selected' : ''}" data-idx="${gIdx}">
         <span class="music-icon">🎵</span>
         <span class="music-name">${m.name}</span>
         <span class="music-badge">tuya</span>
       </div>`;
     }).join('');
+    userGrid.querySelectorAll('.music-card').forEach(el =>
+      el.addEventListener('click', () => selMusic(parseInt(el.dataset.idx))));
   }
 }
 
-function selMusic(i) {
-  selectedMusic = i;
-  renderAllMusic();
-  updateSteps();
-}
+function selMusic(i) { selectedMusic = i; renderAllMusic(); updateSteps(); }
 
 // ===== POSITIONS =====
 function setupPosGrid(gridId, callback) {
@@ -517,7 +491,6 @@ function roundRect(ctx, x, y, w, h, r) {
 
 function drawOverlay(ctx, W, H, title, subtitle, logoOpacity, logoSize, titleSize, subSize) {
   const margin = 24;
-  // Logo
   if (logoImg.complete && logoImg.naturalWidth > 0) {
     const lw = logoSize;
     const lh = Math.round(logoSize * (logoImg.naturalHeight / logoImg.naturalWidth));
@@ -527,7 +500,6 @@ function drawOverlay(ctx, W, H, title, subtitle, logoOpacity, logoSize, titleSiz
     ctx.drawImage(logoImg, lx, ly, lw, lh);
     ctx.restore();
   }
-  // Text block
   const hasSubtitle = subtitle.trim() !== '';
   const totalTextH = titleSize + (hasSubtitle ? subSize * 1.3 : 0);
   ctx.font = `900 ${titleSize}px 'Bebas Neue', Impact, sans-serif`;
@@ -567,6 +539,16 @@ function drawOverlay(ctx, W, H, title, subtitle, logoOpacity, logoSize, titleSiz
   }
 }
 
+// ===== SEEK HELPER =====
+function seekVideo(vid, time) {
+  return new Promise(resolve => {
+    if (Math.abs(vid.currentTime - time) < 0.001) { resolve(); return; }
+    const onSeeked = () => { vid.removeEventListener('seeked', onSeeked); resolve(); };
+    vid.addEventListener('seeked', onSeeked);
+    vid.currentTime = time;
+  });
+}
+
 // ===== MAIN PROCESS =====
 async function startProcessing() {
   document.getElementById('warnMsg').style.display = 'none';
@@ -592,24 +574,22 @@ async function startProcessing() {
 }
 
 async function processWithFFmpeg() {
-  const title = document.getElementById('titleInput').value.trim();
-  const subtitle = document.getElementById('subtitleInput').value.trim();
-  const logoSize = parseInt(document.getElementById('logoSize').value);
+  const title      = document.getElementById('titleInput').value.trim();
+  const subtitle   = document.getElementById('subtitleInput').value.trim();
+  const logoSize   = parseInt(document.getElementById('logoSize').value);
   const logoOpacity = parseInt(document.getElementById('logoOpacity').value) / 100;
   const musicVolPct = parseInt(document.getElementById('musicVol').value) / 100;
 
-  // ----- Load video metadata -----
   const vid = document.createElement('video');
   vid.src = URL.createObjectURL(videoFile);
   vid.muted = true;
   vid.playsInline = true;
   await new Promise((res, rej) => { vid.onloadedmetadata = res; vid.onerror = rej; vid.load(); });
 
-  const duration = vid.duration;
+  const duration  = vid.duration;
   const originalW = vid.videoWidth;
   const originalH = vid.videoHeight;
 
-  // Scale to max 720px on the long side for speed
   const MAX_DIM = 720;
   let W = originalW, H = originalH;
   if (Math.max(W, H) > MAX_DIM) {
@@ -617,11 +597,9 @@ async function processWithFFmpeg() {
     W = Math.round(W * scale);
     H = Math.round(H * scale);
   }
-  // Keep even dimensions (required by H264)
   if (W % 2 !== 0) W--;
   if (H % 2 !== 0) H--;
 
-  // Target fps — use native video fps if possible, default 30
   const FPS = 30;
   const totalFrames = Math.ceil(duration * FPS);
 
@@ -631,21 +609,18 @@ async function processWithFFmpeg() {
   const ctx = canvas.getContext('2d');
 
   const titleSize = Math.max(32, Math.min(W * 0.06, 72));
-  const subSize = Math.max(20, Math.min(W * 0.035, 40));
+  const subSize   = Math.max(20, Math.min(W * 0.035, 40));
 
-  showProgress(true, 'Cargando FFmpeg (primera vez tarda ~10s)...', 4);
+  showProgress(true, 'Cargando FFmpeg (primera vez ~10–15s)...', 4);
 
-  // ----- Init FFmpeg -----
+  // KEY FIX: ensureFFmpeg uses toBlobURL internally
   const ff = await ensureFFmpeg();
-  const fetchFile = getFetchFile();
 
   showProgress(true, 'Preparando archivos...', 6);
 
-  // ----- Write source video to FFmpeg FS -----
   const videoData = await fetchFile(videoFile);
   await ff.writeFile('input_video', videoData);
 
-  // ----- Write music to FFmpeg FS if selected -----
   let hasMusicFile = false;
   if (selectedMusic !== null) {
     const track = getAllTracks()[selectedMusic];
@@ -656,48 +631,36 @@ async function processWithFFmpeg() {
     }
   }
 
-  // ----- Extract frames: seek video frame by frame, draw overlay, write to FFmpeg FS -----
   showProgress(true, 'Extrayendo y procesando frames...', 8);
-
   vid.pause();
   vid.currentTime = 0;
 
-  // Wait for logo to load
   if (!logoImg.complete) {
     await new Promise(r => { logoImg.onload = r; logoImg.onerror = r; });
   }
 
   let frameCount = 0;
-
   for (let f = 0; f < totalFrames; f++) {
     const t = f / FPS;
-
-    // Seek video to exact time
     await seekVideo(vid, Math.min(t, duration - 0.001));
-
-    // Draw frame + overlay
     ctx.drawImage(vid, 0, 0, W, H);
     drawOverlay(ctx, W, H, title, subtitle, logoOpacity, logoSize, titleSize, subSize);
 
-    // Get JPEG bytes from canvas
     const jpgBlob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.88));
     const jpgData = new Uint8Array(await jpgBlob.arrayBuffer());
-
     const frameName = `frame${String(f).padStart(6,'0')}.jpg`;
     await ff.writeFile(frameName, jpgData);
-
     frameCount++;
 
     if (f % 10 === 0) {
       const pct = 8 + (f / totalFrames) * 52;
       showProgress(true, `Procesando frame ${f+1} / ${totalFrames}`, pct);
-      await new Promise(r => setTimeout(r, 0)); // yield to browser
+      await new Promise(r => setTimeout(r, 0));
     }
   }
 
   showProgress(true, 'Codificando MP4...', 62);
 
-  // ----- Build FFmpeg encode command -----
   const ffmpegArgs = [
     '-framerate', String(FPS),
     '-i', 'frame%06d.jpg',
@@ -705,8 +668,7 @@ async function processWithFFmpeg() {
   ];
 
   if (hasMusicFile) {
-    ffmpegArgs.push('-i', 'input_music');
-    ffmpegArgs.push(
+    ffmpegArgs.push('-i', 'input_music',
       '-filter_complex',
       `[1:a]volume=1.0[va];[2:a]volume=${musicVolPct}[ma];[va][ma]amix=inputs=2:duration=first[aout]`,
       '-map', '0:v',
@@ -730,19 +692,15 @@ async function processWithFFmpeg() {
   );
 
   ff.on('progress', ({ progress }) => {
-    const pct = 62 + progress * 35;
-    showProgress(true, `Codificando MP4: ${Math.round(progress * 100)}%`, pct);
+    showProgress(true, `Codificando MP4: ${Math.round(progress * 100)}%`, 62 + progress * 35);
   });
 
   await ff.exec(ffmpegArgs);
-
   showProgress(true, 'Preparando descarga...', 98);
 
-  // ----- Read output -----
   const mp4Data = await ff.readFile('output.mp4');
   const mp4Blob = new Blob([mp4Data.buffer], { type: 'video/mp4' });
 
-  // ----- Cleanup FFmpeg FS -----
   try {
     await ff.deleteFile('input_video');
     if (hasMusicFile) await ff.deleteFile('input_music');
@@ -750,12 +708,10 @@ async function processWithFFmpeg() {
     for (let f = 0; f < frameCount; f++) {
       await ff.deleteFile(`frame${String(f).padStart(6,'0')}.jpg`);
     }
-    // Reset so next run reloads fresh (avoids FS state issues)
     ffmpegLoaded = false;
     ffmpegInstance = null;
   } catch(e) { console.warn('Cleanup error (ignorado):', e); }
 
-  // ----- Show result -----
   const url = URL.createObjectURL(mp4Blob);
   document.getElementById('resultVideo').src = url;
   const dl = document.getElementById('downloadBtn');
@@ -773,15 +729,11 @@ async function processWithFFmpeg() {
   setTimeout(() => showProgress(false), 4000);
 }
 
-// Reliable video seek helper — waits for seeked event
-function seekVideo(vid, time) {
-  return new Promise(resolve => {
-    if (Math.abs(vid.currentTime - time) < 0.001) { resolve(); return; }
-    const onSeeked = () => { vid.removeEventListener('seeked', onSeeked); resolve(); };
-    vid.addEventListener('seeked', onSeeked);
-    vid.currentTime = time;
-  });
-}
+// Expose startProcessing globally for the onclick attribute
+window.startProcessing = startProcessing;
+
+// Boot
+window.addEventListener('DOMContentLoaded', () => loadPresetSongs());
 </script>
 </body>
 </html>
