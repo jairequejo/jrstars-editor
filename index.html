@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Editor de Videos JR STARS</title>
 <script src="https://unpkg.com/fix-webm-duration@1.0.6/fix-webm-duration.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:wght@400;600;700;800;900&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -1017,38 +1019,70 @@ function getSupportedMime() {
   return t.find(m => MediaRecorder.isTypeSupported(m)) || '';
 }
 
-function finishVideo(mimeType, durationSeconds = 0) {
-  showProgress(true, 'Finalizando...', 98);
-  setTimeout(() => {
-    const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
-    const blob = new Blob(recordedChunks, { type: mimeType || 'video/webm' });
+const { FFmpeg } = FFmpegWASM;
+const { fetchFile } = FFmpegUtil;
+let ffmpegInstance = null;
 
-    const finalize = (finalBlob) => {
-      const url = URL.createObjectURL(finalBlob);
-      document.getElementById('resultVideo').src = url;
-      const dl = document.getElementById('downloadBtn');
-      dl.href = url;
-      dl.download = 'video-academia.' + ext;
+async function finishVideo(mimeType, durationSeconds = 0) {
+  showProgress(true, 'Procesando conversión (No apagues la pantalla)...', 98);
 
-      document.getElementById('resultCard').style.display = 'block';
-      document.getElementById('resultCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const webmBlob = new Blob(recordedChunks, { type: 'video/webm' });
+  let finalBlob = webmBlob;
+  let finalExt = 'webm';
 
-      showProgress(true, '¡Listo!', 100);
-      document.getElementById('spinner').style.display = 'none';
-      document.getElementById('processBtnText').textContent = '⚡ GENERAR OTRO VIDEO';
-      document.getElementById('processBtn').disabled = false;
-      document.getElementById('s5').className = 'step-item done';
-    };
+  const finalize = (fb) => {
+    const url = URL.createObjectURL(fb);
+    document.getElementById('resultVideo').src = url;
+    const dl = document.getElementById('downloadBtn');
+    dl.href = url;
+    dl.download = 'video-academia.' + finalExt;
 
-    if (ext === 'webm' && window.ysFixWebmDuration && durationSeconds > 0) {
-      ysFixWebmDuration(blob, Math.round(durationSeconds * 1000), function(fixedBlob) {
-        finalize(fixedBlob);
+    document.getElementById('resultCard').style.display = 'block';
+    document.getElementById('resultCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    showProgress(true, finalExt === 'mp4' ? '¡Video MP4 Listo!' : '¡Video Listo (Respaldo)!', 100);
+    document.getElementById('spinner').style.display = 'none';
+    document.getElementById('processBtnText').textContent = '⚡ GENERAR OTRO VIDEO';
+    document.getElementById('processBtn').disabled = false;
+    document.getElementById('s5').className = 'step-item done';
+    setTimeout(() => showProgress(false), 3000);
+  };
+
+  try {
+    showProgress(true, 'Iniciando Conversor MP4 (~30MB)...', 10);
+    if (!ffmpegInstance) {
+      ffmpegInstance = new FFmpeg();
+      ffmpegInstance.on('progress', ({ progress }) => {
+        showProgress(true, `Comprimiendo a MP4: ${Math.round(progress * 100)}%`, progress * 100);
       });
-    } else {
-      finalize(blob);
+      await ffmpegInstance.load({
+        coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.4/dist/umd/ffmpeg-core.js',
+        wasmURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.4/dist/umd/ffmpeg-core.wasm'
+      });
     }
-    setTimeout(() => showProgress(false), 1800);
-  }, 300);
+
+    showProgress(true, 'Preparando video para Whatsapp...', 20);
+    await ffmpegInstance.writeFile('in.webm', await fetchFile(webmBlob));
+    
+    // Convert directly to H264 MP4 with AAC Audio for maximum compatibility (WhatsApp/iOS)
+    await ffmpegInstance.exec(['-i', 'in.webm', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', '-b:a', '128k', 'out.mp4']);
+    
+    const mp4Data = await ffmpegInstance.readFile('out.mp4');
+    finalBlob = new Blob([mp4Data.buffer], { type: 'video/mp4' });
+    finalExt = 'mp4';
+    finalize(finalBlob);
+
+    ffmpegInstance.deleteFile('in.webm');
+    ffmpegInstance.deleteFile('out.mp4');
+  } catch (err) {
+    console.error("FFmpeg fallback:", err);
+    finalExt = 'webm';
+    if (window.ysFixWebmDuration && durationSeconds > 0) {
+      ysFixWebmDuration(webmBlob, Math.round(durationSeconds * 1000), finalize);
+    } else {
+      finalize(webmBlob);
+    }
+  }
 }
 </script>
 </body>
