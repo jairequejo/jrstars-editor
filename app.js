@@ -385,11 +385,9 @@ async function processWithFFmpeg() {
     args.push('-i', 'music.mp3'); // 2: música
   }
 
-  const fullFilter = audioFilter ? vf.slice(0, -1) + '
-' + audioFilter : vf;
+  const fullFilter = audioFilter ? vf.slice(0, -1) + audioFilter : vf;
   // Quitar null[vout] trailing semicolon si no hay subtítulo
-  const cleanFilter = fullFilter.replace(/;$/, '').replace(/
-/g, '');
+  const cleanFilter = fullFilter.replace(/;$/, '');
 
   args.push(
     '-filter_complex', cleanFilter,
